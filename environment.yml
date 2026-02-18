@@ -1,0 +1,14 @@
+name: chiron-o1
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - openai==1.66.3
+      - Pillow==10.4.0
+      - qwen_vl_utils==0.0.10
+      - torch==2.6.0
+      - torchvision==0.21.0
+      - tqdm==4.67.1
+      - transformers==4.52.4
