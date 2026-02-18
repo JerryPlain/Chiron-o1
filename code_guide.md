@@ -172,6 +172,29 @@ flowchart TD
     I --> J
 ```
 
+文件依赖关系图（模块调用关系）：
+
+```mermaid
+flowchart LR
+    A[src/run.py] --> B[src/model.py]
+    A --> C[src/mics.py]
+    A --> D[src/utils.py]
+
+    C --> D
+    C --> E[src/prompt.py]
+    C --> F[src/step.py]
+    C --> G[src/qwenvl_forward.py]
+    C --> H[src/internvl_forward.py]
+
+    G --> I[qwen_vl_utils]
+    H --> J[torch/torchvision/PIL]
+    B --> K[transformers/torch]
+
+    L[eval/eval.py] --> J
+    L --> K
+    L --> M[openai/bert_score]
+```
+
 ## 5. 数据格式（你改数据时最常看）
 
 参考 `src/demo_data/demo.jsonl`，单条样本关键字段：
