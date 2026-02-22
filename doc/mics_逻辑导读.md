@@ -82,31 +82,29 @@ current_step
 
 ```mermaid
 flowchart TD
-    A[search(data,...)] --> B[Parse question/answer/case/images]
-    B --> C{Image OK?}
-    C -- No --> C1[Write failed_search_file and return]
-    C -- Yes --> D[Init root/current_step/state]
-    D --> E{depth < max_depth}
+    A["search"] --> B["parse question answer case images"]
+    B --> C{"images valid"}
+    C -- "no" --> C1["write failed log then return"]
+    C -- "yes" --> D["init root current step and state"]
+    D --> E{"depth less than max depth"}
 
-    E -- Yes --> F[For each mentor: generate candidate step]
-    F --> G[Evaluate candidate with interns]
-    G --> H[Collect score and child node]
-    H --> I{Any score == 1.0?}
+    E -- "yes" --> F["for each mentor generate candidate step"]
+    F --> G["evaluate candidate with interns"]
+    G --> H["collect score and child node"]
+    H --> I{"any score equals one"}
 
-    I -- Yes --> I1[Write success search_file with search_id=1]
-    I1 --> Z[return]
+    I -- "yes" --> I1["write success with search id one then return"]
 
-    I -- No --> J{All scores == 0?}
-    J -- Yes --> J1[Write failed_search_file]
-    J1 --> Z
+    I -- "no" --> J{"all scores equal zero"}
+    J -- "yes" --> J1["write failed log then return"]
 
-    J -- No --> K[select_next_step -> current_step]
+    J -- "no" --> K["select next step and update current step"]
     K --> E
 
-    E -- No --> L[Finalize at max_depth]
-    L --> M{Valid final mentor chain?}
-    M -- Yes --> M1[Write success search_file with search_id=0]
-    M -- No --> M2[Write failed_search_file]
+    E -- "no" --> L["finalize at max depth"]
+    L --> M{"final mentor chain exists"}
+    M -- "yes" --> M1["write success with search id zero"]
+    M -- "no" --> M2["write failed log"]
 ```
 
 ## 4. mentor 生成子流程

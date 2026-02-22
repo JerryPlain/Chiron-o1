@@ -124,29 +124,29 @@ main
 
 ```mermaid
 flowchart TD
-    A[main] --> B[parse_args]
-    B --> C{arg validation pass?}
-    C -- No --> C1[print errors + help + exit(1)]
-    C -- Yes --> D[mics_start(args)]
+    A["main"] --> B["parse args"]
+    B --> C{"args valid"}
+    C -- "no" --> C1["print errors and help then exit"]
+    C -- "yes" --> D["mics_start"]
 
-    D --> E[load data jsonl/json]
-    E --> F{data loaded?}
-    F -- No --> F1[return]
-    F -- Yes --> G[open success/failed output files]
+    D --> E["load jsonl or json data"]
+    E --> F{"data loaded"}
+    F -- "no" --> F1["return"]
+    F -- "yes" --> G["open success and failed output files"]
 
-    G --> H{num_chunks > 1?}
-    H -- Yes --> H1[get_chunk]
-    H1 --> H2{chunk_idx valid?}
-    H2 -- No --> H3[write failed log + return]
-    H2 -- Yes --> I[init_model(args)]
-    H -- No --> I
+    G --> H{"num_chunks greater than 1"}
+    H -- "yes" --> H1["get chunk"]
+    H1 --> H2{"chunk index valid"}
+    H2 -- "no" --> H3["write failed log and return"]
+    H2 -- "yes" --> I["init model set"]
+    H -- "no" --> I
 
-    I --> J[create MentorInternSearch(args)]
-    J --> K[for each sample d]
-    K --> L[search(d, model_set, ...)]
-    L --> M{sample exception?}
-    M -- Yes --> M1[write failed log and continue]
-    M -- No --> K
+    I --> J["create MentorInternSearch"]
+    J --> K["for each sample d"]
+    K --> L["search one sample"]
+    L --> M{"sample exception"}
+    M -- "yes" --> M1["write failed log and continue"]
+    M -- "no" --> K
 ```
 
 ## 7. 异常与失败策略（run 层）
