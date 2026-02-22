@@ -1,3 +1,4 @@
+# judge prompt for evaluating the correctness of the model's answer against the ground truth answer. The prompt instructs the evaluator to output 'Yes' if the model's answer semantically matches the correct answer, and 'No' otherwise, without providing any explanation.
 JUDGE_PROMPT = """
 Evaluate whether the model's answer aligns with the correct answer semantically. Output 'Yes' only if the model's answer matches the correct result, and 'No' if it does not match or if the correctness is unclear. Provide only 'Yes' or 'No' as the output, without any explanation.
 
@@ -7,7 +8,7 @@ Correct answer: {gt_answer}"""
 
 
 
-
+# Reasoning prompt for generating step-by-step thought process leading to the final answer.
 REASONING_PROMPT = """
 Given a specific question about the images, the patient's case information (such as age, gender, chief complaint and some relevant image analysis ), your goal is to generate a detailed, step-by-step thought process that leads to the correct answer.
 1. Your thought process must rely solely on the provided information. Do not fabricate details or introduce information not present in the inputs.
@@ -30,7 +31,7 @@ Reasoning prefix: {reasoning_prefix}
 Continue your response by building directly on the existing thought process, ensuring that no changes are made to the content of the prior reasoning, and provide a clear and coherent completion of your answer. Just output the completed part.
 """
 
-
+# evaluate prompt for generating the final answer based on the question, case information, and a reasoning prefix that contains the initial part of the thought process. The model is instructed to deduce the correct answer through rigorous reasoning, ensuring that the response is concise, accurate, and conforms to medical terminology standards. The output should only contain the final answer without any explanation.
 EVALUATE_PROMPT = """
 Using the provided medical images and partial thought process, deduce the correct answer of the question through rigorous reasoning. Ensure the response is concise, accurate, and conforms to medical terminology standards. Provide only the final answer.
 
