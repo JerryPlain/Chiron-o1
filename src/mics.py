@@ -475,9 +475,9 @@ class MentorInternSearch:
         # Write success if a valid mentor chain exists; otherwise write failure.
         # ==========================================================
         # By default, use the final selected mentor's chain as output reasoning.
-        if current_step.score >= 0:  
+        if current_step.score >= 0:   # as long as we have a valid step at the final depth, we consider it a success and use that mentor's chain as the output reasoning. This is a more lenient criterion for success compared to requiring a full score of 1.0, which allows us to capture partially successful reasoning paths that may still be valuable for analysis.
             final_mentor = current_step.generated_by
-        else :
+        else:
             final_mentor = "No valid mentor!"
 
         # If the final selected mentor has a valid reasoning chain, we write the success result with that chain. 

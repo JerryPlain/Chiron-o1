@@ -14,6 +14,7 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 def build_transform(input_size):
+    """Build image normalization pipeline expected by the vision backbone."""
     MEAN, STD = IMAGENET_MEAN, IMAGENET_STD
     transform = T.Compose([
         T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
@@ -24,6 +25,10 @@ def build_transform(input_size):
     return transform
 
 def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
+    """
+    Pick the tiling ratio (w_blocks, h_blocks) whose aspect ratio is closest to
+    the original image. Used by dynamic_preprocess for patch splitting.
+    """
     best_ratio_diff = float('inf')
     best_ratio = (1, 1)
     area = width * height
@@ -39,6 +44,10 @@ def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_
     return best_ratio
 
 def dynamic_preprocess(image, min_num=1, max_num=12, image_size=448, use_thumbnail=False):
+    """
+    Resize image to a grid and split into patches.
+    Returns a list of PIL images (patches), with an optional thumbnail.
+    """
     orig_width, orig_height = image.size
     aspect_ratio = orig_width / orig_height
     target_ratios = set(
@@ -68,6 +77,7 @@ def dynamic_preprocess(image, min_num=1, max_num=12, image_size=448, use_thumbna
     return processed_images
 
 def load_image(image_file, input_size=448, max_num=12):
+    """Load one image and convert it to a stacked tensor of patches."""
     image = Image.open(image_file).convert('RGB')
     transform = build_transform(input_size=input_size)
     images = dynamic_preprocess(image, image_size=input_size, use_thumbnail=True, max_num=max_num)
@@ -76,6 +86,7 @@ def load_image(image_file, input_size=448, max_num=12):
     return pixel_values
 
 def ds_forward(client, pred_answer, ground_truth, temperature=0.9):
+    """Ask DeepSeek judge model whether prediction matches ground truth semantically."""
     message = [
         {"role": "user", "content": f"Evaluate whether the model's answer is semantically similar to the correct answer. Output 'Yes' if the model's answer conveys a similar meaning to the correct result, even if the wording differs, and 'No' if it does not. Provide only 'Yes' or 'No' as the output, without any explanation.\nModel's answer: {pred_answer}\nCorrect answer: {ground_truth}"}
     ]
@@ -87,12 +98,23 @@ def ds_forward(client, pred_answer, ground_truth, temperature=0.9):
     return completion.choices[0].message.content.strip()
 
 def get_correctness(judge_output):
+    """Map judge output to 1 / -1."""
     if 'yes' in judge_output.lower():  
         return 1
     else:
         return -1
 
 def evaluate_model(vqa_json_path, image_dir, model_path, output_path, api_key):
+    """
+    Evaluate one VLM on a VQA-style JSON dataset.
+
+    Pipeline:
+    1) Load local vision-language model.
+    2) For each sample: preprocess image(s), run model.chat, parse final answer.
+    3) Use DeepSeek as semantic judge for closed accuracy.
+    4) Compute BERTScore-F1 for lexical/semantic overlap.
+    5) Append per-sample results and final aggregate metrics to output JSON.
+    """
     client = OpenAI(base_url='https://api.deepseek.com',  api_key=api_key)
     model = AutoModel.from_pretrained(
         model_path,
@@ -105,18 +127,18 @@ def evaluate_model(vqa_json_path, image_dir, model_path, output_path, api_key):
 
     with open(vqa_json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    # Initialize metrics
+    # Running metrics across all processed samples.
     closed_correct = 0
     closed_total = 0
     open_bertscore_sum = 0.0
     open_count = 0
-    results_output = []
 
-    # Create or clear the output file
+    # Initialize output file as a JSON list; each sample appends one record.
     if not os.path.exists(output_path):
         with open(output_path, "w", encoding="utf-8") as f:
             f.write("[]")  
     for idx, entry in enumerate(tqdm(data, desc="Processing Entries", unit="entry")):
+        # Parse one dataset row.
         id = entry["id"]
         image_names = entry["img_name"]  
         question = entry["question"]
@@ -127,15 +149,18 @@ def evaluate_model(vqa_json_path, image_dir, model_path, output_path, api_key):
         pixel_values_list = []
         num_patches_list = []
 
+        # Support multi-image questions by concatenating all image patches.
         for image_name in image_names:
             image_path = os.path.join(image_dir, image_name)
             pixel_values_single = load_image(image_path, max_num=12).to(torch.bfloat16).cuda()
             pixel_values_list.append(pixel_values_single)
             num_patches_list.append(pixel_values_single.size(0))
         pixel_values = torch.cat(pixel_values_list, dim=0)
-        # Construct prompt
+
+        # Prompt is simply the question text.
         prompt = f"{question}"
-        # Call the model for inference
+
+        # Local VLM inference.
         response = model.chat(
             tokenizer,
             pixel_values,
@@ -143,18 +168,22 @@ def evaluate_model(vqa_json_path, image_dir, model_path, output_path, api_key):
             generation_config,
             num_patches_list=num_patches_list  
         )
-        # Get predicted answer
+
+        # Expect output format containing "### The final answer is:".
         pred_answer = response.strip()
         if "### The final answer is:" not in pred_answer:
+            # Skip malformed generations to avoid polluting metrics.
             continue
         reason_answer = pred_answer.split("### The final answer is:")[0].strip()
         pred_answer = pred_answer.split("### The final answer is:")[1].strip()
-        # Print question and model's output
+
+        # Console trace for debugging.
         print(f"Question: {question}")
         print(f"Model Answer: {pred_answer}")
         print(f"Ground Truth: {ground_truth}")
         print("========================================")
-        # Calculate accuracy
+
+        # Closed accuracy: judged by external LLM ("Yes"/"No").
         closed_total += 1
         judge_output = ds_forward(client, pred_answer, ground_truth, temperature=0.9)
         if judge_output:
@@ -163,7 +192,8 @@ def evaluate_model(vqa_json_path, image_dir, model_path, output_path, api_key):
                 closed_correct += 1
         else:
             print(f"Failed to get judgment from evaluator")
-        # Calculate BERTScore
+
+        # Open metric: BERTScore-F1 between prediction and ground truth.
         P, R, F1 = score(
             cands=[pred_answer],
             refs=[ground_truth],
@@ -177,7 +207,8 @@ def evaluate_model(vqa_json_path, image_dir, model_path, output_path, api_key):
         f1_score = F1.item()
         open_bertscore_sum += f1_score
         open_count += 1
-        # Construct a single result entry
+
+        # Per-sample record (includes cumulative counters at this point).
         result_entry = {
             "index": id,
             "image_name": image_names,  
@@ -188,19 +219,22 @@ def evaluate_model(vqa_json_path, image_dir, model_path, output_path, api_key):
             "answer_type": answer_type,
             "result": [closed_correct, closed_total, open_bertscore_sum, open_count]
         }
-        # Append the result to the file
+
+        # Append current record to output JSON list.
         with open(output_path, "r+", encoding="utf-8") as f:
             results = json.load(f)
             results.append(result_entry)
             f.seek(0)
             json.dump(results, f, ensure_ascii=False, indent=4)
-    # Calculate final metrics
+
+    # Aggregate metrics over all valid samples.
     closed_acc = closed_correct / closed_total if closed_total > 0 else 0
     open_bertscore_avg = open_bertscore_sum / open_count if open_count > 0 else 0
     print("====== Evaluation Results ======")
     print(f"CLOSED Questions Acc: {closed_acc:.4f}")
     print(f"OPEN   Questions BERTScore-F1: {open_bertscore_avg:.4f}")
-    # Append final metrics to the file
+
+    # Append final summary to the same output JSON list.
     final_metrics = {
         "CLOSED Questions Acc": closed_acc,
         "OPEN   Questions BERTScore-F1": open_bertscore_avg
@@ -212,9 +246,7 @@ def evaluate_model(vqa_json_path, image_dir, model_path, output_path, api_key):
         json.dump(results, f, ensure_ascii=False, indent=4)
 
 def main():
-    """
-    Main function to evaluate multiple models.
-    """
+    """CLI entry: evaluate one model and write per-sample + final metrics."""
     parser = argparse.ArgumentParser(description="Evaluate models on VQA tasks.")
     parser.add_argument("--vqa_json_path", type=str, required=True, help="Path to the VQA JSON file.")
     parser.add_argument("--image_dir", type=str, required=True, help="Directory containing the images.")
