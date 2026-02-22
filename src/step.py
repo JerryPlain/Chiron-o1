@@ -18,6 +18,7 @@ class Step:
         self.generated_by = generated_by  # Tracks which teacher generated this step
         self.depth = parent.depth + 1 if parent else 0
         
+        # Construct the full text for this step by combining prefix_steps and step_text. This allows each step to have the complete reasoning chain up to that point.
         if parent:
             separator = "\n" if self.prefix_steps else ""
             self.text = self.prefix_steps + separator + self.step_text

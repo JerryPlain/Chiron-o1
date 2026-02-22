@@ -24,6 +24,11 @@ def resize_image_if_needed(image_path, max_dimension=512):
         print(f"Error processing image: {e}")
         raise
 
+"""
+encode the image to base64 string for prompting the mentor models. It first checks if the image needs to be resized based on a specified maximum dimension, 
+and if so, it resizes the image while maintaining the aspect ratio. 
+Then, it encodes the (resized) image into a base64 string that can be included in the prompt for the mentor models.
+"""
 def encode_to_base64(buffered):
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
@@ -41,7 +46,6 @@ def encode_image(image_path):
         print(f"Error encoding image: {e}")
         raise
 
-
 def split_list(lst, n):
     chunk_size = math.ceil(len(lst) / n)  
     return [lst[i:i+chunk_size] for i in range(0, len(lst), chunk_size)]
@@ -57,8 +61,20 @@ def read_jsonl(file):
 
 
 def locate_img(d, args):
-    valid_paths = []
-    extensions = []
+    """
+    Locate image paths from the input data dictionary and verify their existence.
+    It checks for the presence of images in the specified directory and also supports absolute paths.
+    Args:
+        d (dict): The input data dictionary containing image references.
+        args: Command-line arguments containing the image directory path.
+    Returns:
+        valid_paths (list): A list of valid image paths that exist on the filesystem.
+        extensions (list): A list of file extensions corresponding to the valid image paths.
+    Raises:
+        ValueError: If no valid image paths are found in the input data.
+    """
+    valid_paths = [] # to store the valid image paths that exist on the filesystem, which will be used for encoding and prompting the mentor models.
+    extensions = [] # to store the file extensions of the valid image paths e.g. jpg, png, etc. which will be used for constructing the correct data URI for prompting the mentor models.
     for img in d['images']:
         if os.path.exists(os.path.join(args.image_dir_path, img)):
             full_path = os.path.join(args.image_dir_path, img)
@@ -68,7 +84,7 @@ def locate_img(d, args):
             valid_paths.append(img)
             extensions.append(os.path.splitext(img)[1][1:].lower())
     if not valid_paths:
-        raise ValueError(f"No valid image paths found in: {d['image']}")
+        raise ValueError(f"No valid image paths found in: {d['images']}")
     return valid_paths, extensions
 
 
@@ -183,7 +199,7 @@ def select_best_mentor(mentors_scores, current_depth):
     return random.choice(best_mentors)
 
 
-def process_case_info(data):
+def process_case_info(data): # used for formatting case information into a structured string for prompting. It extracts key details such as presentation, age, gender, and captions, and formats them into a clear and organized string that can be easily included in prompts for the mentor models.
     """
     Process the case information and format it into a structured string.
 
@@ -199,7 +215,7 @@ def process_case_info(data):
     gender = data.get("gender_label", "N/A")
     captions = data.get("caption", [])
 
-    
+    # format the patient information into a structured string for prompting
     formatted_string = f"Chief complaint: {presentation}\n"
     formatted_string += f"Age: {age}\n"
     formatted_string += f"Gender: {gender}\n"
@@ -279,6 +295,7 @@ def replace_image_references(text):
     replaced_text = re.sub(pattern, replace_with_numbered_images, text)
     return replaced_text
 
+# extract the first step from the reasoning chain for evaluation, which is used in select_next_step and also for root-layer strategy to bootstrap faster by prompting mentors with only the first step instead of the full chain.
 def extract_first_step(text):
     """
     Extract the content of the first step from the input text.
@@ -298,6 +315,7 @@ def extract_first_step(text):
 
     return ""
 
+# extract the first two steps from the reasoning chain for root-layer strategy to bootstrap faster by prompting mentors with only the first two steps instead of the full chain.
 def extract_first_two_steps(text):
     """
     Extract the content of the first two steps from the input text.

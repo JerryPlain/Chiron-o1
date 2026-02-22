@@ -1,15 +1,33 @@
 import json
 from tqdm import tqdm
 import os
-import argparse
+import argparse # for parsing command-line arguments，which allows flexible configuration of the run without changing code.
 from utils import read_jsonl, get_chunk 
 from model import init_model
-from mics import MentorInternSearch 
+from mics import MentorInternSearch # the main search logic is encapsulated in this class.
 import traceback
 
 def mics_start(args):
+    """
+    Run the end-to-end MICS job.
+
+    High-level responsibilities:
+    - Load dataset from JSONL/JSON
+    - Prepare success/failed output streams
+    - Initialize local intern models
+    - Dispatch each sample to MentorInternSearch.search(...)
+    - Keep the batch alive when one sample fails
+    """
+    # ==========================================================
+    # [A] Load input data into memory.
+    # Supports:
+    # - JSONL (one object per line)
+    # - JSON array
+    # ==========================================================
     data_path = args.data_path
     data = None 
+    
+    # Support both JSONL (line-delimited) and JSON array inputs.
     if data_path.endswith('.jsonl'):
         try:
             data = read_jsonl(data_path)
@@ -31,19 +49,29 @@ def mics_start(args):
         print("Error: Data loading failed.")
         return
 
+    # ==========================================================
+    # [B] Prepare output paths and ensure output directory exists.
+    # - success file: args.output_path
+    # - failed file:  args.output_path with suffix _failed.jsonl
+    # ==========================================================
     output_path = args.output_path
     failed_search_path = args.output_path.replace('.jsonl', '_failed.jsonl')
 
     try:
         output_dir = os.path.dirname(output_path)
         if output_dir: 
+             # Create the output directory only when a directory part is present.
              os.makedirs(output_dir, exist_ok=True)
     except OSError as e:
         print(f"Error creating output directory {output_dir}: {e}")
         return 
 
     try:
+        # ==========================================================
+        # [C] Open output streams for the whole run.
+        # ==========================================================
         with open(output_path, "w") as search_file, open(failed_search_path, "w") as failed_search_file:
+            # Optional shard mode for distributed jobs.
             if args.num_chunks > 1:
                 try:
                     data = get_chunk(data, args.num_chunks, args.chunk_idx)
@@ -52,7 +80,9 @@ def mics_start(args):
                     failed_search_file.write(json.dumps({"error": f"Invalid chunk index {args.chunk_idx} for {args.num_chunks} chunks."}) + "\n")
                     return
 
-            # Initialize models
+            # ==========================================================
+            # [D] Initialize local intern models once per run.
+            # ==========================================================
             model_set = None
             try:
                 model_set = init_model(args)
@@ -61,17 +91,22 @@ def mics_start(args):
                 failed_search_file.write(json.dumps({"error": "Model initialization failed", "details": str(e)}) + "\n")
                 return 
 
-            # Instantiate the search class
-            search_process = None
+            # Create the search orchestrator; it receives full runtime config via args.
             search_process = MentorInternSearch(args)
             
 
+            # ==========================================================
+            # [E] Process samples one by one.
+            # Per-sample failures are isolated and logged without stopping the run.
+            # ==========================================================
             print(f"Processing {len(data)} data items...")
             for d in tqdm(data):
-                data_id = d.get('rid', 'N/A') 
+                data_id = d.get('rid', 'N/A')
                 try:
+                    # Delegate one full sample search to mics.py.
                     search_process.search(d, model_set, search_file, failed_search_file)
                 except Exception as e:
+                    # Defensive isolation: keep batch running even if one sample crashes.
                     error_message = traceback.format_exc()
                     print(f"\n!!! Unexpected error during search for data ID {data_id}: {error_message} !!!")
                     error_log = {
@@ -83,20 +118,33 @@ def mics_start(args):
                     failed_search_file.flush() 
 
     except IOError as e:
+        # File-level I/O errors (open/write) are handled here.
         print(f"Error opening or writing to output files ({output_path}, {failed_search_path}): {e}")
     except Exception as e:
+         # Catch-all for unexpected runtime errors outside sample loop.
          print(f"An unexpected error occurred outside the main loop: {e}")
 
 if __name__ == "__main__":
+    # ==========================================================
+    # [0] Parse all runtime configuration from CLI.
+    # ==========================================================
     parser = argparse.ArgumentParser(description="Run Mentor-Intern Reasoning Search") 
+    
+    # [I/O] Core input/output paths.
     parser.add_argument("--data_path", type=str, default='./rp_stage3_data/d2d_qa.jsonl', required=True, help="Path to input data (.jsonl or .json)") 
     parser.add_argument("--image_dir_path", type=str, default='./rp_stage3_data/images', required=True, help="Path to the directory containing images") 
     parser.add_argument("--output_path", type=str, default='./test/tsis_results.jsonl', required=True, help="Path to save successful results (.jsonl)") 
+    
+    # [Sharding] Optional controls for multi-process/multi-machine runs.
     parser.add_argument("--num_chunks", type=int, default=1, help="Number of chunks to split data into")
     parser.add_argument("--chunk_idx", type=int, default=0, help="Index of the chunk to process (0-based)")
+    
+    # [Local intern checkpoints] Paths for locally loaded intern models.
     parser.add_argument("--qwen25_vl_7b_model_path", type=str, default='Qwen/Qwen2.5-VL-7B-Instruct', required=True, help="Path to Qwen25-VL 7B model")
     parser.add_argument("--qwen2_vl_7b_model_path", type=str, default='Qwen/Qwen2-VL-7B-Instruct', required=True, help="Path to Qwen2-VL 7B model")
     parser.add_argument("--internvl3_8b_model_path", type=str, default='OpenGVLab/InternVL3-8B', required=True, help="Path to InternVL3 8B model")
+    
+    # [Remote APIs] Credentials/endpoints for mentor and evaluator providers.
     parser.add_argument("--openai_api_key", type=str, default="sk-xxx" ,required=True) 
     parser.add_argument("--openai_base_url", type=str, default='' ,required=True)
     parser.add_argument("--qwen_api_key", type=str, default="sk-xxx" ,required=True) 
@@ -108,24 +156,31 @@ if __name__ == "__main__":
     parser.add_argument("--mentor_models", nargs='+', type=str, default=['chatgpt-4o-latest', 'google/gemini-2.5-pro-preview-03-25', 'qwen2.5-vl-72b-instruct'], required=True, help="List of mentor model names (must match keys in model_dict or be 'gpt-...' style)")
     parser.add_argument("--intern_models", nargs='+', type=str, default=['qwen25_vl_7b', 'qwen2_vl_7b', 'internvl3_8b'], required=True, help="List of intern model names (must match keys in model_dict)")
     parser.add_argument("--evaluator_model", type=str, default='deepseek-chat', help="Evaluator model name (must be GPT for default JUDGE_PROMPT)")
+   
+    # [Search hyperparameters]
     parser.add_argument("--max_depth", type=int, default=3, help="Maximum number of reasoning steps to generate.")
     parser.add_argument("--temperature1", type=float, default=1.2, help="First temperature for intern model evaluation and mentor generation.")
     parser.add_argument("--temperature2", type=float, default=0.2, help="Second temperature for intern model evaluation.")
   
+    # All runtime behavior is configured via CLI for reproducible experiments.
     args = parser.parse_args()
   
     errors = []
+    # Map intern model names to the CLI arg that should provide their local checkpoint.
     model_name_to_arg_map = {
         'qwen25_vl_7b': 'qwen25_vl_7b_model_path',
         'internvl3_8b': 'internvl3_8b_model_path',
         'qwen2_vl_7b': 'qwen2_vl_7b_model_path'
     }
 
-    # Validate Mentors
+    # ==========================================================
+    # [Validation] Ensure runtime configuration is coherent.
+    # ==========================================================
+    # At least two mentors are required by the search design.
     if len(args.mentor_models) < 2:
         errors.append("At least two mentor models must be specified via --mentor_models.")
 
-    # Validate Interns
+    # At least one intern is required for scoring candidate steps.
     if len(args.intern_models) < 1:
         errors.append("At least one intern model must be specified via --intern_models.")
     else:
@@ -133,10 +188,10 @@ if __name__ == "__main__":
             arg_name = model_name_to_arg_map.get(model_name)
             if not arg_name:
                  errors.append(f"Intern model '{model_name}' is not recognized or mapped to a path argument.")
-            elif getattr(args, arg_name, None) is None:
+            elif not getattr(args, arg_name, None):
                  errors.append(f"Path for intern model '{model_name}' (expected argument --{arg_name}) was not provided.")
 
-    # Report errors if any
+    # Fail fast on invalid configuration before any heavy initialization.
     if errors:
         print("\nArgument Validation Errors:")
         for error in errors:
@@ -145,4 +200,3 @@ if __name__ == "__main__":
         exit(1) 
 
     mics_start(args)
-
