@@ -126,6 +126,117 @@ previous_mentors = ["mentorB", "mentorA"]  # 假设 depth1 选中 mentorA
 
 如果 `depth=1` 某 mentor 达到 `score==1.0`，会提前成功写结果并返回；否则继续下一层直到 `max_depth` 或失败条件触发。
 
+### 2.3 `new_step` 为什么在 root 取“两步”：一个完整走读例子
+
+这一节专门回答你提到的问题：为什么 `new_step` 在 root 层取的是 `suffix_reasoning` 的前两步（`extract_first_two_steps`），而后续层只取一步（`extract_first_step`）。
+
+#### 场景设定
+
+- `max_depth = 3`
+- `mentor_models = ["mentorA", "mentorB"]`
+- 初始：`current_step = root`
+- `root.text = "Let's think about how to solve this problem clearly and reasonably step by step."`
+
+注意：`_generate_next_step_with_mentor(...)` 返回的是“补全后的整段后缀”`suffix_reasoning`，不是单步。
+
+#### depth = 0（root 层）
+
+代码路径：`if current_step.parent is None`（`src/mics.py`）
+
+1. mentorA 生成
+- `prefix_reasoning = current_step.get_full_reasoning()`
+- `prefix_reasoning` 实际值：
+
+```text
+Let's think about how to solve this problem clearly and reasonably step by step.
+```
+
+- mentorA 返回 `suffix_reasoning`（示例）：
+
+```text
+### Step 1: Review key imaging findings first.
+### Step 2: Correlate findings with age and chief complaint.
+### Step 3: Narrow differential diagnoses.
+### The final answer is: Disease X
+```
+
+2. root 层抽取逻辑（关键）
+- 执行：`new_step = extract_first_two_steps(suffix_reasoning)`
+- 得到：
+
+```text
+### Step 1: Review key imaging findings first.
+
+### Step 2: Correlate findings with age and chief complaint.
+```
+
+3. 缓存整条链
+- 执行：`complete_reasoning = prefix_reasoning + "\n" + suffix_reasoning`
+- `reasoning_chains["mentorA"] = complete_reasoning`
+- 这份缓存后续可复用，避免重复请求同一 mentor。
+
+4. 评分时构造临时节点
+- 执行：
+  - `temp_step = Step(step_text=new_step, prefix_steps=current_step.text, parent=current_step, generated_by="mentorA")`
+- 这时 `temp_step.text` 约等于：
+
+```text
+Let's think about how to solve this problem clearly and reasonably step by step.
+### Step 1: Review key imaging findings first.
+
+### Step 2: Correlate findings with age and chief complaint.
+```
+
+5. 正式挂树
+- 执行：`actual_child = current_step.add_child_step(step_text=new_step, score=..., generated_by="mentorA")`
+- 结果：root 下新增一个子节点，其 `step_text` 是“Step1+Step2”。
+
+mentorB 同样走一遍后，会有另一个 root 子节点（也是“前两步”形式）。
+
+6. 本层选择
+- `generated_children_for_step = [child_from_A, child_from_B]`
+- 通过 intern 分数选 `current_step = select_next_step(...)`
+- 假设选中 mentorA 的 child，那么下一轮从这个 child 继续。
+
+#### depth = 1（非 root 层）
+
+代码路径：`else` 分支
+
+这里开始只取一步，不再取两步。
+
+情况 A：如果上一层选中的正好还是 mentorA
+- 走缓存复用分支：
+  - `new_step = reasoning_chains["mentorA"].split("###")[depth + 2].strip()`
+  - 这里 `depth=1`，索引是 `3`，目标是拿“下一步”（示意为 Step 3）
+- 不再调用 mentorA 远程生成，减少延迟和成本。
+
+情况 B：若切到 mentorB
+- 重新调用 `_generate_next_step_with_mentor(...)` 生成新的 `suffix_reasoning`
+- 执行：`new_step = extract_first_step(suffix_reasoning)`（只拿第一步）
+
+无论 A/B，非 root 层的 `new_step` 语义都是“单步增量”。
+
+#### depth = 2（继续非 root）
+
+重复 depth=1 的模式：
+- 同 mentor可继续复用缓存取“下一步”
+- 换 mentor则重新生成并只抽第一步
+- 每轮都只把“这一轮增量 step”挂到树上
+
+#### 最终你会看到的树形（示意）
+
+```text
+root
+└── child(depth0, mentorA): [Step1 + Step2]
+    └── child(depth1, mentorA or B): [Step3]
+        └── child(depth2, mentorA or B): [Step4]
+```
+
+结论：
+- root 层用“两步启动”是为了让第一轮评估信号更稳定，并配合缓存减少后续重复生成。
+- 非 root 层回到“单步扩展”，保证搜索是逐层推进的。
+- 所以你看到 `new_step` 在 root 是 `suffix` 的前两步，这是一个有意的 bootstrap 策略，不是 bug。
+
 ## 10. JSON 结构总览（逐个解析 + 为什么这样设计）
 
 这一节把流程里会碰到的 JSON/JSONL 都列出来，便于你排查数据问题。

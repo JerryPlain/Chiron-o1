@@ -10,11 +10,14 @@ class Step:
             score: Score of this step (based on student model evaluation).
             generated_by: Teacher model that generated this step.
         """
-        self.step_text = step_text
+        self.step_text = step_text # The text for this step, which may include the "### Step X: ..." prefix. This is the new content added at this step.
+
         self.parent = parent
         self.children = []
         self.score = score  # Score from student evaluation
+        
         self.prefix_steps = prefix_steps  # All steps before this node
+
         self.generated_by = generated_by  # Tracks which teacher generated this step
         self.depth = parent.depth + 1 if parent else 0
         
